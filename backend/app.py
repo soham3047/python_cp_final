@@ -1,98 +1,286 @@
 import os
 import sys
-
 import torch
-from flask import request
-
-from flask import Flask, jsonify, send_from_directory
-from flask_cors import CORS
-from flask import Flask, jsonify, send_from_directory
+import torch.nn as nn
+import torch.optim as optim
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-
-
-# Dynamic path injection to fix the 'No module named backend' error
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-# Prevent global tensorflow/tensorboard imports from throwing compatibility errors
 sys.modules['tensorflow'] = None
 sys.modules['tensorboard'] = None
 
-# Initialize Flask app pointing to the frontend folder for static assets
 frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 app = Flask(__name__, static_folder=frontend_dir, static_url_path='')
-CORS(app) # Allow cross-origin requests
+CORS(app)
 
+# Resolve model path relative to this file so it works from any working directory
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "global_geniedose_model.pt")
+
+
+# ─────────────────────────────────────────────────────────────
+# Model definition (5-feature, matches hospital_client.py)
+# ─────────────────────────────────────────────────────────────
+class ClinicalDosageModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(5, 16), nn.ReLU(),
+            nn.Linear(16, 8), nn.ReLU(),
+            nn.Linear(8, 1)
+        )
+    def forward(self, x):
+        return self.network(x)
+
+
+# ─────────────────────────────────────────────────────────────
+# Bootstrap trainer — runs ONCE on startup if .pt is missing
+# Reads the real VCF files from mock_data, trains on them,
+# and saves the model so every subsequent request works instantly
+# ─────────────────────────────────────────────────────────────
+def bootstrap_train_model():
+    print("\n⚙️  global_geniedose_model.pt not found.")
+    print("   Running one-time bootstrap training on mock VCF patients...\n")
+
+    mock_dir = os.path.join(BASE_DIR, "mock_data")
+
+    # Minimal inline VCF parser (avoids circular imports at startup)
+    def parse_vcf(path):
+        profile = {"rs1799853_cyp2c9_2": "0/0",
+                   "rs1057910_cyp2c9_3": "0/0",
+                   "rs9923231_vkorc1":   "0/0"}
+        age, weight = 50, 70
+        if not os.path.exists(path):
+            print(f"   ⚠️  VCF not found: {path} — using defaults")
+            return age, weight, profile
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("##PATIENT_AGE="):
+                    try: age = int(line.split("=")[1])
+                    except: pass
+                elif line.startswith("##PATIENT_WEIGHT="):
+                    try: weight = float(line.split("=")[1])
+                    except: pass
+                elif line.startswith("#"):
+                    continue
+                else:
+                    cols = line.split("\t")
+                    if len(cols) < 10:
+                        continue
+                    rsid = cols[2]
+                    fmt  = cols[8].split(":")
+                    smp  = cols[9].split(":")
+                    if "GT" in fmt:
+                        gt = smp[fmt.index("GT")]
+                        if rsid == "rs1799853":
+                            profile["rs1799853_cyp2c9_2"] = gt
+                        elif rsid == "rs1057910":
+                            profile["rs1057910_cyp2c9_3"] = gt
+                        elif rsid == "rs9923231":
+                            profile["rs9923231_vkorc1"] = gt
+        return age, weight, profile
+
+    def encode_gt(gt):
+        return {"0/0": 0.0, "0/1": 1.0, "1/1": 2.0}.get(gt, 0.0)
+
+    # Same rule-based formula as vcf_processing_engine.evaluate_clinical_dosage
+    def rule_dosage(age, weight, g):
+        d = 5.0
+        if age > 65:  d -= 0.5
+        if age > 75:  d -= 0.5
+        if weight < 60: d -= 0.5
+        vk = g["rs9923231_vkorc1"]
+        c2 = g["rs1799853_cyp2c9_2"]
+        c3 = g["rs1057910_cyp2c9_3"]
+        if vk == "0/1":             d *= 0.72
+        elif vk == "1/1":           d *= 0.43
+        if c2 in ("0/1", "1/1"):    d *= 0.81
+        if c3 == "0/1":             d *= 0.66
+        elif c3 == "1/1":           d *= 0.34
+        return max(0.5, round(d, 4))
+
+    vcf_files = [
+        "patient_1_normal.vcf",
+        "patient_2_vkorc1_sensitive.vcf",
+        "patient_3_cyp2c9_slow.vcf",
+        "patient_4_critical_combined.vcf",
+    ]
+
+    X_list, Y_list = [], []
+    for fname in vcf_files:
+        age, weight, g = parse_vcf(os.path.join(mock_dir, fname))
+        target = rule_dosage(age, weight, g)
+        X_list.append([age, weight,
+                        encode_gt(g["rs1799853_cyp2c9_2"]),
+                        encode_gt(g["rs1057910_cyp2c9_3"]),
+                        encode_gt(g["rs9923231_vkorc1"])])
+        Y_list.append(target)
+        print(f"   Patient {fname}: age={age}, weight={weight}kg → target={target} mg/day")
+
+    X = torch.tensor(X_list, dtype=torch.float32)
+    Y = torch.tensor(Y_list, dtype=torch.float32).unsqueeze(1)
+
+    model     = ClinicalDosageModel()
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+
+    model.train()
+    for epoch in range(600):
+        optimizer.zero_grad()
+        loss = criterion(model(X), Y)
+        loss.backward()
+        optimizer.step()
+        if (epoch + 1) % 200 == 0:
+            print(f"   Epoch {epoch+1}/600 — Loss: {loss.item():.6f}")
+
+    torch.save(model.state_dict(), MODEL_PATH)
+    print(f"\n✅ Bootstrap training complete! Model saved → {MODEL_PATH}\n")
+
+
+# ── Run check at import time ──────────────────────────────────
+if not os.path.exists(MODEL_PATH):
+    bootstrap_train_model()
+else:
+    print(f"✅ Model already exists at {MODEL_PATH} — ready to predict.")
+
+
+# ─────────────────────────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────────────────────────
 @app.route('/')
 def serve_index():
-    """Serves the main dashboard page."""
     return send_from_directory(frontend_dir, 'index.html')
+
 
 @app.route('/run-simulation', methods=['POST'])
 def trigger_simulation():
-    """API endpoint that triggers the federated learning engine process."""
     try:
-        # Import internally to prevent matplotlib thread blocking issues
         from backend.federated_engine import run_fl_simulation
-        
-        print("\n🌐 Web Dashboard requested a simulation run...")
-        # Run 5 rounds of the simulation
+        print("\n🌐 Simulation requested via dashboard...")
         run_fl_simulation(num_rounds=5)
-        
-        return jsonify({"status": "success", "message": "Federated Learning simulation completed successfully!"})
+        return jsonify({"status": "success", "message": "Federated Learning simulation completed!"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-    
 
 
 @app.route('/predict-dosage', methods=['POST'])
-def predict_dosage():
-    """Takes clinical attributes from frontend and uses the local model to predict dosage."""
+def predict_dosage_standard():
+    """Manual mode fallback — uses the 10-feature DosagePredictionModel."""
     try:
-        data = request.json
-        drug = data.get('drug')
+        data     = request.json
+        drug     = data.get('drug')
         mutation = float(data.get('mutation', 0))
-        age = float(data.get('age', 50))
-        weight = float(data.get('weight', 70))
+        age      = float(data.get('age', 50))
+        weight   = float(data.get('weight', 70))
 
-        # Reconstruct the 10-feature array expected by model.py
-        # [cyp2c9, vkorc1, cyp2c19, cyp2d6, cyp3a5, age, weight, liver, kidney, nsaids]
-        feature_vector = [0.0] * 10
-        
+        fv = [0.0] * 10
         if drug == 'warfarin':
-            feature_vector[0] = mutation  # cyp2c9
-            feature_vector[1] = mutation  # vkorc1
-            feature_vector[5] = age
-            feature_vector[6] = weight
-            feature_vector[7] = 1.0       # Normal baseline liver function
-            feature_vector[8] = 1.0       # Normal baseline kidney function
-        else: # sertraline
-            feature_vector[2] = mutation  # cyp2c19
-            feature_vector[3] = mutation  # cyp2d6
-            feature_vector[5] = age
-            feature_vector[6] = weight
-            feature_vector[7] = 1.0
-            feature_vector[8] = 1.0
+            fv[0] = mutation; fv[1] = mutation
+            fv[5] = age;      fv[6] = weight
+            fv[7] = 1.0;      fv[8] = 1.0
+        else:
+            fv[2] = mutation; fv[3] = mutation
+            fv[5] = age;      fv[6] = weight
+            fv[7] = 1.0;      fv[8] = 1.0
 
-        # Import model blueprint dynamically
         from backend.model import DosagePredictionModel
-        model = DosagePredictionModel(input_dim=10)
-        
-        # Pass features through network (eval mode)
-        model.eval()
+        m = DosagePredictionModel(input_dim=10)
+        m.eval()
         with torch.no_grad():
-            input_tensor = torch.tensor([feature_vector], dtype=torch.float32)
-            predicted_tensor = model(input_tensor)
-            calculated_dosage = float(predicted_tensor.item())
+            pred = m(torch.tensor([fv], dtype=torch.float32)).item()
 
-        # Format clean display units based on drug guidelines
         unit = "mg/day" if drug == 'warfarin' else "mg"
-        formatted_result = f"🎯 Recommended Initial {drug.capitalize()} Dosage: {calculated_dosage:.2f} {unit}"
-        
-        return jsonify({"status": "success", "result": formatted_result})
+        return jsonify({"status": "success",
+                        "result": f"🎯 Recommended {drug.capitalize()} Dosage: {pred:.2f} {unit}"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+@app.route('/api/predict-vcf-dosage', methods=['POST'])
+def predict_dosage_federated_vcf():
+    try:
+        data = request.json
+        m = ClinicalDosageModel()
+        m.load_state_dict(torch.load(MODEL_PATH))
+        m.eval()
+        feats = torch.tensor([[
+            float(data.get('age', 50)),
+            float(data.get('weight', 70)),
+            float(data.get('rs1799853', 0)),
+            float(data.get('rs1057910', 0)),
+            float(data.get('rs9923231', 0))
+        ]], dtype=torch.float32)
+        with torch.no_grad():
+            val = m(feats).item()
+        return jsonify({"status": "success",
+                        "recommended_dosage": f"{round(val,2)} mg/day"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/predict-vcf-upload', methods=['POST'])
+def predict_vcf_upload():
+    """
+    VCF upload endpoint.
+    Age, weight, and all mutations are auto-parsed from the file.
+    No manual input required from the frontend.
+    """
+    try:
+        if 'file' not in request.files:
+            return jsonify({"status": "error", "message": "No file uploaded!"}), 400
+
+        file = request.files['file']
+        os.makedirs(os.path.join(BASE_DIR, "temp_cache"), exist_ok=True)
+        temp_path = os.path.join(BASE_DIR, "temp_cache", file.filename)
+        file.save(temp_path)
+
+        # ✅ One call — gets clinical_data AND genomics from the VCF itself
+        from vcf_processing_engine import parse_vcf_and_predict
+        clinical_data, genomics = parse_vcf_and_predict(temp_path)
+
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        print(f"\n🧬 Auto-parsed from '{file.filename}':")
+        print(f"   Age    : {clinical_data['age']} yrs")
+        print(f"   Weight : {clinical_data['weight']} kg")
+        print(f"   Genomics: {genomics}")
+
+        m = ClinicalDosageModel()
+        m.load_state_dict(torch.load(MODEL_PATH))
+        m.eval()
+
+        def encode_gt(gt):
+            return {"0/0": 0.0, "0/1": 1.0, "1/1": 2.0}.get(gt, 0.0)
+
+        feats = torch.tensor([[
+            float(clinical_data['age']),
+            float(clinical_data['weight']),
+            encode_gt(genomics["rs1799853_cyp2c9_2"]),
+            encode_gt(genomics["rs1057910_cyp2c9_3"]),
+            encode_gt(genomics["rs9923231_vkorc1"])
+        ]], dtype=torch.float32)
+
+        with torch.no_grad():
+            final_dosage = max(0.5, round(m(feats).item(), 2))
+
+        return jsonify({
+            "status":           "success",
+            "result":           f"🎯 Federated ML Predicted Dosage: {final_dosage} mg/day",
+            "detected_mutations": (
+                f"CYP2C9*2: {genomics['rs1799853_cyp2c9_2']} | "
+                f"CYP2C9*3: {genomics['rs1057910_cyp2c9_3']} | "
+                f"VKORC1: {genomics['rs9923231_vkorc1']}"
+            ),
+            "auto_parsed_age":    clinical_data['age'],
+            "auto_parsed_weight": clinical_data['weight']
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 if __name__ == "__main__":
-    print("🌍 GenieDose Flask Server launching on http://127.0.0.1:5000")
+    print("🌍 GenieDose Flask Server → http://127.0.0.1:5000")
     app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)

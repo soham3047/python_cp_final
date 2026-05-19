@@ -1,11 +1,8 @@
-##fileformat=VCFv4.2
-##fileDate=20260520
-##source=GenieDoseMockVCFGenerator
-##reference=GRCh38
-##INFO=<ID=DP,Number=1,Type=Integer,Description="Total Depth">
-##FILTER=<ID=PASS,Description="All filters passed">
-##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##fileformat=VCFv4.1
+##PATIENT_AGE=68
+##PATIENT_WEIGHT=61
+##INFO=<ID=RS,Number=1,Type=String,Description="dbSNP rsID">
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	PATIENT
-chr10	94942290	rs1799853	C	T	100	PASS	DP=32	GT	0/0
-chr10	94943591	rs1057910	A	C	100	PASS	DP=31	GT	0/0
-chr16	31107641	rs9923231	G	A	100	PASS	DP=42	GT	1/1
+10	94942290	rs1799853	C	T	50	PASS	RS=rs1799853	GT:DP	0/0:30
+10	94981296	rs1057910	A	C	50	PASS	RS=rs1057910	GT:DP	0/0:28
+16	31107689	rs9923231	C	T	50	PASS	RS=rs9923231	GT:DP	0/1:32

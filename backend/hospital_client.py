@@ -101,7 +101,7 @@ class HospitalFlowerClient(fl.client.NumPyClient):
         print(f"✅ Local cycle complete. Training Loss: {loss.item():.4f}")
         return self.get_parameters(config={}), len(X_train), {}
 
-    def evaluate(self, parameters, config):
+def evaluate(self, parameters, config):
         self.set_parameters(parameters)
         model.eval()
         inputs = torch.tensor(X_train, dtype=torch.float32)
@@ -109,6 +109,10 @@ class HospitalFlowerClient(fl.client.NumPyClient):
         with torch.no_grad():
             outputs = model(inputs)
             loss = criterion(outputs, labels)
+            
+        # 🎯 NEW: Save the globally optimized brain file when training rounds finish
+        torch.save(model.state_dict(), "global_geniedose_model.pt")
+        
         return float(loss.item()), len(X_train), {}
 
 # Fire up connection pipeline to the running server

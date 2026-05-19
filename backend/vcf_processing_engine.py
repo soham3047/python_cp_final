@@ -1,4 +1,33 @@
 import os
+import re
+
+def parse_vcf_patient_metadata(vcf_path):
+    """
+    NEW: Reads ##PATIENT_ header lines from VCF to extract age and weight.
+    Your VCF files must have these two lines in their headers:
+        ##PATIENT_AGE=62
+        ##PATIENT_WEIGHT=78
+    Returns a dict with 'age' and 'weight' (or None if not found).
+    """
+    metadata = {"age": None, "weight": None}
+
+    with open(vcf_path, 'r') as f:
+        for line in f:
+            if not line.startswith('#'):
+                break  # Stop once we leave the header block
+
+            # Match ##PATIENT_AGE=<number>
+            age_match = re.match(r'##PATIENT_AGE=(\d+)', line.strip())
+            if age_match:
+                metadata["age"] = int(age_match.group(1))
+
+            # Match ##PATIENT_WEIGHT=<number>
+            weight_match = re.match(r'##PATIENT_WEIGHT=(\d+\.?\d*)', line.strip())
+            if weight_match:
+                metadata["weight"] = float(weight_match.group(1))
+
+    return metadata
+
 
 def parse_vcf_genomics(vcf_path):
     """
@@ -8,32 +37,29 @@ def parse_vcf_genomics(vcf_path):
     genomic_profile = {
         "rs1799853_cyp2c9_2": "0/0",
         "rs1057910_cyp2c9_3": "0/0",
-        "rs9923231_vkorc1": "0/0"
+        "rs9923231_vkorc1":   "0/0"
     }
-    
-    # Safety check: Prevent immediate crashing if path is wrong
+
     if not os.path.exists(vcf_path):
         raise FileNotFoundError(f"⚠️ Could not find VCF file at: {vcf_path}. Check your folder path!")
-    
+
     with open(vcf_path, 'r') as file:
         for line in file:
-            # Skip header lines
             if line.startswith('#'):
                 continue
-            
+
             columns = line.strip().split('\t')
             if len(columns) < 10:
                 continue
-                
-            rsid = columns[2]
+
+            rsid         = columns[2]
             format_field = columns[8].split(':')
             patient_field = columns[9].split(':')
-            
-            # Find the index of the Genotype (GT) tag
+
             if 'GT' in format_field:
                 gt_index = format_field.index('GT')
                 genotype = patient_field[gt_index]
-                
+
                 if rsid == "rs1799853":
                     genomic_profile["rs1799853_cyp2c9_2"] = genotype
                 elif rsid == "rs1057910":
@@ -44,15 +70,34 @@ def parse_vcf_genomics(vcf_path):
     return genomic_profile
 
 
+def parse_vcf_and_predict(vcf_path, fallback_age=50, fallback_weight=70):
+    """
+    NEW MASTER FUNCTION: Combines metadata + genomics parsing into one call.
+    Used by app.py's /api/predict-vcf-upload endpoint.
+    Returns: (clinical_data_dict, genomics_dict)
+    """
+    # 1. Try to pull age/weight from the VCF header
+    metadata = parse_vcf_patient_metadata(vcf_path)
+
+    clinical_data = {
+        "age":    metadata["age"]    if metadata["age"]    is not None else fallback_age,
+        "weight": metadata["weight"] if metadata["weight"] is not None else fallback_weight
+    }
+
+    # 2. Pull the three pharmacogenomic SNPs
+    genomics = parse_vcf_genomics(vcf_path)
+
+    return clinical_data, genomics
+
+
 def evaluate_clinical_dosage(clinical_data, genomics):
     """
-    Combines parsed genomic metrics with clinical patient data to calculate 
+    Combines parsed genomic metrics with clinical patient data to calculate
     precise initial dosing benchmarks and toxicity alerts.
     """
-    age = clinical_data['age']
+    age    = clinical_data['age']
     weight = clinical_data['weight']
-    
-    # Base baseline clinical dosing estimation formula
+
     base_dose = 5.0
     if age > 65:
         base_dose -= 0.5
@@ -60,76 +105,44 @@ def evaluate_clinical_dosage(clinical_data, genomics):
         base_dose -= 0.5
     if weight < 60:
         base_dose -= 0.5
-        
-    # Apply Genomic Penalties based on parsed metrics
-    vkorc1 = genomics["rs9923231_vkorc1"]
+
+    vkorc1   = genomics["rs9923231_vkorc1"]
     cyp2c9_2 = genomics["rs1799853_cyp2c9_2"]
     cyp2c9_3 = genomics["rs1057910_cyp2c9_3"]
-    
-    # 1. VKORC1 Sensitivity Modifiers
+
     if vkorc1 == "0/1":
-        base_dose *= 0.72   # Moderate sensitivity reduction
+        base_dose *= 0.72
     elif vkorc1 == "1/1":
-        base_dose *= 0.43   # High sensitivity reduction
-        
-    # 2. CYP2C9 Clearance Modifiers
-    if cyp2c9_2 == "0/1" or cyp2c9_2 == "1/1":
+        base_dose *= 0.43
+
+    if cyp2c9_2 in ("0/1", "1/1"):
         base_dose *= 0.81
     if cyp2c9_3 == "0/1":
         base_dose *= 0.66
     elif cyp2c9_3 == "1/1":
-        base_dose *= 0.34   # Critical clearing restriction
-        
+        base_dose *= 0.34
+
     final_dosage = round(base_dose, 2)
-    
-    # Generate Dynamic Risk Warnings and Suitability Outputs for the UI
-    suitability = "SUITABLE WITH PRECAUTIONS"
-    risk_level = "Low Risk"
+
+    suitability    = "SUITABLE WITH PRECAUTIONS"
+    risk_level     = "Low Risk"
     clinical_notes = "Standard maintenance tracking is required."
-    
+
     if final_dosage >= 4.0:
-        risk_level = "Normal Baseline"
-        suitability = "FULLY SUITABLE"
+        risk_level     = "Normal Baseline"
+        suitability    = "FULLY SUITABLE"
         clinical_notes = "Patient exhibits typical drug clearing patterns and expected sensitivities."
     elif 2.0 <= final_dosage < 4.0:
-        risk_level = "Moderate Toxic Risk"
-        clinical_notes = "Patient has an elevated risk of bleeding due to genetic variants. Monitor baseline INR closely."
+        risk_level     = "Moderate Toxic Risk"
+        clinical_notes = "Patient has elevated bleeding risk due to genetic variants. Monitor INR closely."
     elif final_dosage < 2.0:
-        risk_level = "CRITICAL TOXICITY WARNING"
-        suitability = "HIGH RISK / ALTERNATIVE SUGGESTED"
-        clinical_notes = "Extremely narrow therapeutic window! Standard dosing will cause toxic systemic build-up."
+        risk_level     = "CRITICAL TOXICITY WARNING"
+        suitability    = "HIGH RISK / ALTERNATIVE SUGGESTED"
+        clinical_notes = "Extremely narrow therapeutic window! Standard dosing will cause toxic build-up."
 
     return {
         "recommended_dosage": f"{final_dosage} mg/day",
         "suitability_status": suitability,
         "toxic_risk_profile": risk_level,
-        "clinical_notes": clinical_notes
+        "clinical_notes":     clinical_notes
     }
-
-# ==========================================
-# SIMULATION WORKFLOWS FOR YOUR 4 PROFILES
-# ==========================================
-
-# 🎯 FIXED PATHS: Updated to target your 'mock_data' folder properly!
-patients_clinical_inputs = {
-    "mock_data/patient_1_normal.vcf": {"age": 45, "weight": 75},
-    "mock_data/patient_2_vkorc1_sensitive.vcf": {"age": 68, "weight": 61},
-    "mock_data/patient_3_cyp2c9_slow.vcf": {"age": 52, "weight": 80},
-    "mock_data/patient_4_critical_combined.vcf": {"age": 79, "weight": 55}
-}
-
-print("=== GENIEDOSE INTEGRATED ANALYSIS REPORT ===\n")
-for vcf_file, clinical_info in patients_clinical_inputs.items():
-    print(f"🔄 Processing File: {vcf_file}")
-    
-    # 1. Extract entities from DNA sequence
-    genomics = parse_vcf_genomics(vcf_file)
-    print(f"   ↳ Extracted Genotypes: {genomics}")
-    
-    # 2. Run clinical math + rule boundaries
-    report = evaluate_clinical_dosage(clinical_info, genomics)
-    
-    print(f"   ↳ Result Dosing: {report['recommended_dosage']}")
-    print(f"   ↳ Profile Status: {report['suitability_status']}")
-    print(f"   ↳ Threat Evaluation: {report['toxic_risk_profile']}")
-    print(f"   ↳ System Instructions: {report['clinical_notes']}\n" + "-"*50 + "\n")
