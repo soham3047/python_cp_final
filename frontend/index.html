@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GenieDose Admin Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧬 GenieDose Control Panel</h1>
+            <p>Secure Non-IID Genomic Federated Learning Engine</p>
+        </header>
+
+        <main class="dashboard-grid">
+            <div class="control-card">
+                <h3>Simulation Controls</h3>
+                <p>Spawns local hospital instances using Flower Virtual Processes inside memory.</p>
+                <button id="start-btn" class="btn">🚀 Start Federated Training</button>
+            </div>
+
+            <div class="status-card">
+                <h3>System Console Logs</h3>
+                <div id="console-output" class="console">
+                    Ready to initialize simulation pipeline...
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
