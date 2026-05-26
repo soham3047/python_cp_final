@@ -1,0 +1,10 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##PATIENT_AGE=24
+##PATIENT_WEIGHT=68.0
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Total Depth">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chr10	94762741	rs4244285	G	A	100	PASS	DP=40	GT	0/1
+chr10	94775312	rs28399504	G	A	100	PASS	DP=38	GT	0/0
+chr17	30211440	rs25531	A	G	100	PASS	DP=50	GT	1/1

@@ -97,12 +97,16 @@ header p { margin: 0.5rem 0 0 0; color: #94a3b8; }
     padding: 0.75rem;
     border-radius: 6px;
     font-size: 1rem;
+    outline: none;
+}
+
+.input-group select:focus, .input-group input:focus {
+    border-color: #38bdf8;
 }
 
 .btn-predict {
     grid-column: span 2;
     background-color: #38bdf8;
-    margin-top: 0.5rem;
 }
 .btn-predict:hover { background-color: #0284c7; }
 
@@ -112,7 +116,67 @@ header p { margin: 0.5rem 0 0 0; color: #94a3b8; }
     border-left: 4px solid #38bdf8;
     padding: 1rem;
     border-radius: 4px;
-    font-size: 1.1rem;
-    color: #f1f5f9;
-    font-weight: 500;
+    font-family: monospace;
+    white-space: pre-wrap;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Modal Overlay Layer Rules (Appended without touching old style)
+   ───────────────────────────────────────────────────────────── */
+.btn-graph {
+    background-color: #4b5563;
+    color: #fff;
+}
+.btn-graph:hover { background-color: #374151; }
+
+.modal-backdrop {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background-color: rgba(2, 6, 23, 0.85);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center; justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+    box-sizing: border-box;
+}
+
+.modal-content {
+    background-color: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    width: 100%;
+    max-width: 900px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    background-color: #0f172a;
+    border-bottom: 1px solid #334155;
+}
+
+.modal-header h3 { margin: 0; font-size: 1.1rem; color: #38bdf8; }
+
+.modal-close-icon {
+    font-size: 1.75rem;
+    font-weight: bold;
+    color: #94a3b8;
+    cursor: pointer;
+    line-height: 1;
+}
+.modal-close-icon:hover { color: #f8fafc; }
+
+.modal-body {
+    padding: 1.5rem;
+    background-color: #1e293b;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 300px;
 }

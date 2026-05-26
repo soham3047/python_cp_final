@@ -9,71 +9,59 @@ os.makedirs('backend/mock_data', exist_ok=True)
 class GenomicDosageDataset(Dataset):
     def __init__(self, csv_file):
         df = pd.read_csv(csv_file)
-        # Drop metadata columns to isolate mathematical features
+        # Drop categorical metadata labels to isolate training tensors
         self.X = torch.tensor(df.drop(columns=['patient_id', 'target_drug', 'optimal_dosage']).values, dtype=torch.float32)
         self.y = torch.tensor(df['optimal_dosage'].values, dtype=torch.float32).unsqueeze(1)
 
-    def __len__(self): return len(self.y)
-    def __getitem__(self, idx): return self.X[idx], self.y[idx]
+    def __len__(self): 
+        return len(self.y)
+        
+    def __getitem__(self, idx): 
+        return self.X[idx], self.y[idx]
 
 def generate_synthetic_databases(num_samples=250):
-    """Generates clinically relevant local databases for specific drug classes."""
+    """Generates clinically aligned local data repositories for the Serotonin pathway."""
     np.random.seed(42)
     
-    # Concrete genetic features mapped to CPIC guidelines
-    # 0 = Normal/Wild Type, 1 = Heterozygous Variant, 2 = Homozygous Mutant
+    # 5 Structural Features: [Age, Weight, CYP2C19*2, CYP2C19*3, SLC6A4]
     features = [
-        'cyp2c9_mutations',   # Warfarin clearance pathway
-        'vkorc1_variant',     # Warfarin sensitivity pathway
-        'cyp2c19_mutations',  # SSRI Antidepressant pathway
-        'cyp2d6_mutations',   # Tricyclic Antidepressant pathway
-        'dpyd_mutations',
-        'cyp3a5_expresser',   # Tacrolimus pathway
-        'age_years',          # Clinical baseline feature 1
-        'weight_kg',          # Clinical baseline feature 2
-        'liver_function_score',# Clinical baseline feature 3
-        'kidney_filtration',  # Clinical baseline feature 4
-        'concurrent_nsaids'   # Drug-drug interaction feature
+        'age_years',
+        'weight_kg',
+        'rs4244285_cyp2c19_2', 
+        'rs28399504_cyp2c19_3',
+        'rs25531_slc6a4'
     ]
     
-    # --- HOSPITAL ALPHA: WARFARIN COHORT (Cardiovascular Specialty) ---
-    alpha_data = np.random.randint(0, 3, size=(num_samples, 5)) # Genetic tokens
-    alpha_clinical = np.hstack([
-        np.random.randint(45, 85, size=(num_samples, 1)),   # Older age demographic
-        np.random.randint(55, 110, size=(num_samples, 1)),  # Weight range
-        np.random.uniform(0.6, 1.4, size=(num_samples, 2)), # Liver/Kidney indicators
-        np.random.randint(0, 2, size=(num_samples, 1))      # NSAID flags
+    # Hospital Beta (Serotonin Target Base)
+    clinical = np.hstack([
+        np.random.randint(18, 76, size=(num_samples, 1)),   # Age
+        np.random.randint(48, 112, size=(num_samples, 1))   # Weight (kg)
     ])
-    alpha_combined = np.hstack([alpha_data, alpha_clinical])
-    alpha_df = pd.DataFrame(alpha_combined, columns=features)
-    alpha_df.insert(0, 'patient_id', [f'CARD_WARFARIN_{i}' for i in range(num_samples)])
-    alpha_df.insert(1, 'target_drug', 'Warfarin')
+    genomics = np.random.choice([0, 1, 2], size=(num_samples, 3), p=[0.65, 0.25, 0.10])
     
-    # Warfarin Mathematical Dosage Rule: VKORC1 variants drastically suppress required dosage concentrations
-    alpha_df['optimal_dosage'] = 5.0 - (alpha_df['vkorc1_variant'] * 1.8) - (alpha_df['cyp2c9_mutations'] * 0.9) + (alpha_df['weight_kg'] * 0.03) + np.random.normal(0, 0.2, num_samples)
-    # Clip values to ensure medical realism (minimum dosage threshold)
-    alpha_df['optimal_dosage'] = alpha_df['optimal_dosage'].clip(lower=0.5)
-    alpha_df.to_csv('backend/mock_data/hospital_alpha.csv', index=False)
-
-    # --- HOSPITAL BETA: ANTIDEPRESSANT COHORT (Psychiatric Care Center) ---
-    beta_data = np.random.randint(0, 3, size=(num_samples, 5))
-    beta_clinical = np.hstack([
-        np.random.randint(18, 60, size=(num_samples, 1)),   # Younger age demographic
-        np.random.randint(50, 95, size=(num_samples, 1)),   # Weight range
-        np.random.uniform(0.8, 1.2, size=(num_samples, 2)), # Functional indicators
-        np.random.randint(0, 2, size=(num_samples, 1))
-    ])
-    beta_combined = np.hstack([beta_data, beta_clinical])
-    beta_df = pd.DataFrame(beta_combined, columns=features)
-    beta_df.insert(0, 'patient_id', [f'PSYCH_SERTRAINE_{i}' for i in range(num_samples)])
-    beta_df.insert(1, 'target_drug', 'Sertraline')
+    matrix = np.hstack([clinical, genomics])
+    df = pd.DataFrame(matrix, columns=features)
     
-    # Antidepressant Mathematical Dosage Rule: High mutations in cyp2c19 mean poor clearance = accumulate toxically = lower dose
-    beta_df['optimal_dosage'] = 50.0 - (beta_df['cyp2c19_mutations'] * 15.0) + (beta_df['age_years'] * 0.2) + np.random.normal(0, 2.0, num_samples)
-    beta_df['optimal_dosage'] = beta_df['optimal_dosage'].clip(lower=12.5)
-    beta_df.to_csv('backend/mock_data/hospital_beta.csv', index=False)
+    df.insert(0, 'patient_id', [f'GD_SEROTONIN_{i}' for i in range(num_samples)])
+    df.insert(1, 'target_drug', 'Sertraline')
     
-    print("✓ Clinical genomic databases successfully re-populated for Warfarin & Sertraline!")
+    # Dosing formulation: Baseline 50mg, adjusted downward for variants or older age
+    df['optimal_dosage'] = (
+        50.0 
+        - (df['rs4244285_cyp2c19_2'] * 12.5) 
+        - (df['rs28399504_cyp2c19_3'] * 15.0) 
+        - (df['rs25531_slc6a4'] * 7.5) 
+        + (df['weight_kg'] * 0.05)
+        - (df['age_years'] * 0.08)
+        + np.random.normal(0, 1.0, num_samples)
+    )
+    
+    df['optimal_dosage'] = df['optimal_dosage'].clip(lower=12.5, upper=200.0).round(2)
+    
+    # Save matching historical files across hospital nodes
+    df.to_csv('backend/mock_data/hospital_alpha.csv', index=False)
+    df.to_csv('backend/mock_data/hospital_beta.csv', index=False)
+    print("✓ GenieDose backend database refreshed for Serotonin data parsing.")
 
 def load_hospital_data(hospital_name, batch_size=16):
     csv_path = f'backend/mock_data/hospital_{hospital_name}.csv'

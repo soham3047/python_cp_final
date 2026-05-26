@@ -26,7 +26,10 @@ def parse_vcf_genomics(vcf_path):
         "rs1799853_cyp2c9_2": "0/0",
         "rs1057910_cyp2c9_3": "0/0",
         "rs9923231_vkorc1":   "0/0",
-        "rs3918290_dpyd":     "0/0"  # NEW: DPYD Chemo Feature
+        "rs3918290_dpyd":     "0/0",  # DPYD Chemo Feature
+        "rs4244285_cyp2c19_2": "0/0",  # NEW: Serotonin Features
+        "rs28399504_cyp2c19_3": "0/0",
+        "rs25531_slc6a4":      "0/0"
     }
 
     if not os.path.exists(vcf_path):
@@ -51,8 +54,14 @@ def parse_vcf_genomics(vcf_path):
                     genomic_profile["rs1057910_cyp2c9_3"] = gt
                 elif rsid == "rs9923231":
                     genomic_profile["rs9923231_vkorc1"] = gt
-                elif rsid == "rs3918290":                         # NEW
-                    genomic_profile["rs3918290_dpyd"] = gt        # NEW
+                elif rsid == "rs3918290":                         
+                    genomic_profile["rs3918290_dpyd"] = gt        
+                elif rsid == "rs4244285":                         # NEW Serotonin Mapping
+                    genomic_profile["rs4244285_cyp2c19_2"] = gt
+                elif rsid == "rs28399504":                        # NEW Serotonin Mapping
+                    genomic_profile["rs28399504_cyp2c19_3"] = gt
+                elif rsid == "rs25531":                           # NEW Serotonin Mapping
+                    genomic_profile["rs25531_slc6a4"] = gt
                     
     return genomic_profile
 
@@ -60,8 +69,7 @@ def parse_vcf_genomics(vcf_path):
 def evaluate_clinical_dosage(clinical_data, genomics, drug="warfarin"):
     """
     CPIC-aligned rule-based dosage calculator.
-    Supports Warfarin (blood thinner) and 5-Fluorouracil (chemotherapy).
-    This is deterministic and correct — it's the primary result for VCF uploads.
+    Supports Warfarin, 5-Fluorouracil, and Sertraline (Serotonin pathway).
     """
     age    = clinical_data['age']
     weight = clinical_data['weight']
@@ -117,36 +125,23 @@ def evaluate_clinical_dosage(clinical_data, genomics, drug="warfarin"):
     # 5-FLUOROURACIL (Chemotherapy drug)
     # ─────────────────────────────────────────────────────────────
     elif drug.lower() in ("5-fu", "5fu", "fluorouracil"):
-        # Standard 5-FU dosing: typically 400-500 mg/m² IV bolus
-        # Body Surface Area (BSA) approximation: sqrt(height*weight/3600)
-        # For simplified calculation: base dosage around 1000 mg depending on DPYD
         base_dose = 1000.0
-        
-        # Age-based adjustment
-        if age > 75: base_dose *= 0.85  # Elderly patients need dose reduction
-        
-        # Weight-based adjustment
+        if age > 75: base_dose *= 0.85  
         if weight < 50: base_dose *= 0.8
         elif weight > 100: base_dose *= 1.1
         
-        # DPYD gene is CRITICAL for 5-FU metabolism
         dpyd = genomics["rs3918290_dpyd"]
-        
-        # DPYD variants cause severe toxicity or contraindication
         if dpyd == "0/1":
-            # Heterozygous DPYD variant - reduced clearance
             base_dose *= 0.5
             risk_level = "🟡 Moderate Toxicity Risk"
             suitability = "SUITABLE WITH DOSE REDUCTION"
             clinical_notes = "DPYD heterozygous variant detected. 50% dose reduction recommended. Monitor for severe toxicity."
         elif dpyd == "1/1":
-            # Homozygous DPYD variant - severe toxicity / contraindication
             base_dose = 0.0
             risk_level = "🔴 CRITICAL — DO NOT ADMINISTER STANDARD DOSE"
             suitability = "CONTRAINDICATED — GENETIC TESTING REQUIRED"
             clinical_notes = "Homozygous DPYD mutation detected. Standard 5-FU dosing will cause severe toxicity. Alternative chemotherapy agents must be considered. Genetic counseling recommended."
         else:
-            # DPYD 0/0 - normal metabolism
             risk_level = "🟢 Normal Metabolism"
             suitability = "FULLY SUITABLE"
             clinical_notes = "Normal DPYD metabolism. Standard 5-FU dosing appropriate. Monitor for cumulative toxicity."
@@ -154,8 +149,39 @@ def evaluate_clinical_dosage(clinical_data, genomics, drug="warfarin"):
         final_dosage = round(max(0.0, base_dose), 2)
 
     # ─────────────────────────────────────────────────────────────
-    # DEFAULT: Unknown drug
+    # SEROTONIN DRUG (Sertraline / Antidepressant) - NEW
     # ─────────────────────────────────────────────────────────────
+    elif drug.lower() in ("sertraline", "serotonin"):
+        def encode_gt_internal(gt):
+            return {"0/0": 0.0, "0/1": 1.0, "1/1": 2.0}.get(gt, 0.0)
+
+        val_cyp2c19_2 = encode_gt_internal(genomics.get("rs4244285_cyp2c19_2", "0/0"))
+        val_cyp2c19_3 = encode_gt_internal(genomics.get("rs28399504_cyp2c19_3", "0/0"))
+        val_slc6a4 = encode_gt_internal(genomics.get("rs25531_slc6a4", "0/0"))
+
+        base_dose = (
+            50.0 
+            - (val_cyp2c19_2 * 12.5) 
+            - (val_cyp2c19_3 * 15.0) 
+            - (val_slc6a4 * 7.5) 
+            + (weight * 0.05)
+            - (age * 0.08)
+        )
+        final_dosage = round(max(12.5, min(200.0, base_dose)), 2)
+
+        if val_cyp2c19_2 >= 1.0 or val_cyp2c19_3 >= 1.0:
+            risk_level = "🟡 Moderate Metabolic Risk"
+            suitability = "SUITABLE WITH PRECAUTIONS"
+            clinical_notes = "Reduced CYP2C19 metabolism detected. Monitor for prolonged QT intervals and typical SSRI side effects."
+        elif val_slc6a4 >= 1.0:
+            risk_level = "🟡 Altered Transporter Sensitivity"
+            suitability = "SUITABLE WITH MONITORING"
+            clinical_notes = "Altered serotonin transporter expression. Response profile may vary; titrate based on clinical response."
+        else:
+            risk_level = "🟢 Normal Responder Profile"
+            suitability = "FULLY SUITABLE"
+            clinical_notes = "Normal serotonin pathway genetics. Standard Sertraline dosing guidelines apply."
+
     else:
         final_dosage = 0.0
         risk_level = "⚪ Unknown Drug"
@@ -163,7 +189,7 @@ def evaluate_clinical_dosage(clinical_data, genomics, drug="warfarin"):
         clinical_notes = f"Drug '{drug}' is not currently supported by GenieDose."
 
     return {
-        "recommended_dosage": f"{final_dosage} mg/day" if final_dosage > 0 else "CONTRAINDICATED",
+        "recommended_dosage": f"{final_dosage} mg" if drug.lower() in ("sertraline", "serotonin") else f"{final_dosage} mg/day",
         "dosage_value":        final_dosage,
         "suitability_status":  suitability,
         "toxic_risk_profile":  risk_level,
@@ -173,17 +199,6 @@ def evaluate_clinical_dosage(clinical_data, genomics, drug="warfarin"):
 
 
 def parse_vcf_and_predict(vcf_path, drug="warfarin", fallback_age=50, fallback_weight=70):
-    """
-    Master function: parses metadata + genomics from one VCF file.
-    Returns (clinical_data dict, genomics dict, dosage_report dict)
-    The dosage_report is the authoritative CPIC rule-based result.
-    
-    Args:
-        vcf_path: Path to VCF file
-        drug: Drug name ('warfarin' or '5-fu') - defaults to 'warfarin'
-        fallback_age: Default age if not found in VCF
-        fallback_weight: Default weight if not found in VCF
-    """
     metadata = parse_vcf_patient_metadata(vcf_path)
     clinical_data = {
         "age":    metadata["age"]    if metadata["age"]    is not None else fallback_age,
