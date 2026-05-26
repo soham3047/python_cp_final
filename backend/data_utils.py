@@ -27,6 +27,7 @@ def generate_synthetic_databases(num_samples=250):
         'vkorc1_variant',     # Warfarin sensitivity pathway
         'cyp2c19_mutations',  # SSRI Antidepressant pathway
         'cyp2d6_mutations',   # Tricyclic Antidepressant pathway
+        'dpyd_mutations',
         'cyp3a5_expresser',   # Tacrolimus pathway
         'age_years',          # Clinical baseline feature 1
         'weight_kg',          # Clinical baseline feature 2

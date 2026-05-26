@@ -25,7 +25,7 @@ class ClinicalDosageModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(5, 16), nn.ReLU(),
+            nn.Linear(6, 16), nn.ReLU(),  # Changed input from 5 to 6
             nn.Linear(16, 8), nn.ReLU(),
             nn.Linear(8, 1)
         )
@@ -50,7 +50,8 @@ def bootstrap_train_model():
     def parse_vcf_simple(path):
         profile = {"rs1799853_cyp2c9_2": "0/0",
                    "rs1057910_cyp2c9_3": "0/0",
-                   "rs9923231_vkorc1":   "0/0"}
+                   "rs9923231_vkorc1":   "0/0",
+                   "rs3918290_dpyd":     "0/0"}
         age, weight = 50, 70
         if not os.path.exists(path):
             return age, weight, profile
@@ -76,12 +77,13 @@ def bootstrap_train_model():
                         if rsid == "rs1799853": profile["rs1799853_cyp2c9_2"] = gt
                         elif rsid == "rs1057910": profile["rs1057910_cyp2c9_3"] = gt
                         elif rsid == "rs9923231": profile["rs9923231_vkorc1"]  = gt
+                        elif rsid == "rs3918290": profile["rs3918290_dpyd"] = gt
         return age, weight, profile
 
     def encode_gt(gt):
         return {"0/0": 0.0, "0/1": 1.0, "1/1": 2.0}.get(gt, 0.0)
 
-    def rule_dosage(age, weight, vkorc1, cyp2c9_2, cyp2c9_3):
+    def rule_dosage(age, weight, vkorc1, cyp2c9_2, cyp2c9_3, dpyd):
         d = 5.0
         if age > 65:  d -= 0.5
         if age > 75:  d -= 0.5
@@ -91,6 +93,10 @@ def bootstrap_train_model():
         if cyp2c9_2 in ("0/1","1/1"):   d *= 0.81
         if cyp2c9_3 == "0/1":           d *= 0.66
         elif cyp2c9_3 == "1/1":         d *= 0.34
+        if dpyd == "0/1": 
+            d *= 0.5  
+        elif dpyd == "1/1": 
+            d *= 0.0
         return max(0.5, d)
 
     vcf_files = [
@@ -108,7 +114,8 @@ def bootstrap_train_model():
         target = rule_dosage(age, weight,
                               g["rs9923231_vkorc1"],
                               g["rs1799853_cyp2c9_2"],
-                              g["rs1057910_cyp2c9_3"])
+                              g["rs1057910_cyp2c9_3"],
+                              g["rs3918290_dpyd"])
         print(f"   {fname}: age={age}, weight={weight}kg → {round(target,2)} mg/day")
 
         for _ in range(50):
@@ -119,11 +126,13 @@ def bootstrap_train_model():
             aug_target = rule_dosage(aug_age, aug_weight,
                                      g["rs9923231_vkorc1"],
                                      g["rs1799853_cyp2c9_2"],
-                                     g["rs1057910_cyp2c9_3"])
+                                     g["rs1057910_cyp2c9_3"],
+                                     g["rs3918290_dpyd"])
             X_list.append([aug_age, aug_weight,
                             encode_gt(g["rs1799853_cyp2c9_2"]),
                             encode_gt(g["rs1057910_cyp2c9_3"]),
-                            encode_gt(g["rs9923231_vkorc1"])])
+                            encode_gt(g["rs9923231_vkorc1"]),
+                            encode_gt(g["rs3918290_dpyd"])])
             Y_list.append(aug_target)
 
     X = torch.tensor(X_list, dtype=torch.float32)
@@ -151,11 +160,13 @@ def bootstrap_train_model():
             rule = rule_dosage(age, weight,
                                g["rs9923231_vkorc1"],
                                g["rs1799853_cyp2c9_2"],
-                               g["rs1057910_cyp2c9_3"])
+                               g["rs1057910_cyp2c9_3"],
+                               g["rs3918290_dpyd"])
             feat = torch.tensor([[age, weight,
                                    encode_gt(g["rs1799853_cyp2c9_2"]),
                                    encode_gt(g["rs1057910_cyp2c9_3"]),
-                                   encode_gt(g["rs9923231_vkorc1"])]], dtype=torch.float32)
+                                   encode_gt(g["rs9923231_vkorc1"]),
+                                   encode_gt(g["rs3918290_dpyd"])]], dtype=torch.float32)
             ml_pred = model(feat).item()
             print(f"   {fname}: rule={round(rule,2)}, model={round(ml_pred,2)}")
 
@@ -186,25 +197,43 @@ def trigger_simulation():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 @app.route('/predict-dosage', methods=['POST'])
 def predict_dosage_standard():
-    """Manual mode — 10-feature model, no VCF."""
+    """Manual mode — 11-feature model, no VCF."""
     try:
         data     = request.json
-        drug     = data.get('drug')
+        drug     = data.get('drug', 'warfarin').lower()
         mutation = float(data.get('mutation', 0))
         age      = float(data.get('age', 50))
         weight   = float(data.get('weight', 70))
 
-        fv = [0.0] * 10
+        # Rebuilt vector map to exactly match 11 features defined in data_utils.py
+        # [cyp2c9, vkorc1, cyp2c19, cyp2d6, dpyd, cyp3a5, age, weight, liver, kidney, nsaids]
+        fv = [0.0] * 11
+        
         if drug == 'warfarin':
-            fv[0]=mutation; fv[1]=mutation; fv[5]=age; fv[6]=weight; fv[7]=1.0; fv[8]=1.0
-        else:
-            fv[2]=mutation; fv[3]=mutation; fv[5]=age; fv[6]=weight; fv[7]=1.0; fv[8]=1.0
+            fv[0] = mutation  # cyp2c9_mutations
+            fv[1] = mutation  # vkorc1_variant
+        elif drug == '5-fu':
+            fv[4] = mutation  # NEW: dpyd_mutations (Maps Chemo correctly!)
+        else: # sertraline
+            fv[2] = mutation  # cyp2c19_mutations
+            fv[3] = mutation  # cyp2d6_mutations
+
+        fv[6] = age       # age_years
+        fv[7] = weight    # weight_kg
+        fv[8] = 1.0       # liver_function_score
+        fv[9] = 1.0       # kidney_filtration
 
         from backend.model import DosagePredictionModel
-        m = DosagePredictionModel(input_dim=10)
+        m = DosagePredictionModel(input_dim=11)
+        
+        # Dynamically loading global weights if available from a simulation session
+        FED_MODEL_PATH = os.path.join(BASE_DIR, "federated_geniedose_model.pt")
+        if os.path.exists(FED_MODEL_PATH):
+            m.load_state_dict(torch.load(FED_MODEL_PATH, weights_only=True))
+            print("🧠 Loaded global federated intelligence parameters.")
+        
         m.eval()
         with torch.no_grad():
             pred = m(torch.tensor([fv], dtype=torch.float32)).item()
@@ -214,36 +243,76 @@ def predict_dosage_standard():
                         "result": f"🎯 Recommended {drug.capitalize()} Dosage: {pred:.2f} {unit}"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+# @app.route('/predict-dosage', methods=['POST'])
+# def predict_dosage_standard():
+#     """Manual mode — 11-feature model, no VCF."""
+#     try:
+#         data     = request.json
+#         drug     = data.get('drug', 'warfarin').lower()
+#         mutation = float(data.get('mutation', 0))
+#         age      = float(data.get('age', 50))
+#         weight   = float(data.get('weight', 70))
+
+#         # FIX: Rebuilt vector map to exactly match 11 features defined in data_utils.py
+#         # [cyp2c9, vkorc1, cyp2c19, cyp2d6, dpyd, cyp3a5, age, weight, liver, kidney, nsaids]
+#         fv = [0.0] * 11
+#         if drug == 'warfarin':
+#             fv[0] = mutation  # cyp2c9_mutations
+#             fv[1] = mutation  # vkorc1_variant
+#         else:
+#             fv[2] = mutation  # cyp2c19_mutations
+#             fv[3] = mutation  # cyp2d6_mutations
+
+#         fv[6] = age       # age_years
+#         fv[7] = weight    # weight_kg
+#         fv[8] = 1.0       # liver_function_score
+#         fv[9] = 1.0       # kidney_filtration
+
+#         from backend.model import DosagePredictionModel
+#         m = DosagePredictionModel(input_dim=11)
+        
+#         # FIX: Dynamically loading global weights if available from a simulation session
+#         FED_MODEL_PATH = os.path.join(BASE_DIR, "federated_geniedose_model.pt")
+#         if os.path.exists(FED_MODEL_PATH):
+#             m.load_state_dict(torch.load(FED_MODEL_PATH, weights_only=True))
+#             print("🧠 Loaded global federated intelligence parameters.")
+        
+#         m.eval()
+#         with torch.no_grad():
+#             pred = m(torch.tensor([fv], dtype=torch.float32)).item()
+
+#         unit = "mg/day" if drug == 'warfarin' else "mg"
+#         return jsonify({"status": "success",
+#                         "result": f"🎯 Recommended {drug.capitalize()} Dosage: {pred:.2f} {unit}"})
+#     except Exception as e:
+#         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route('/api/predict-vcf-upload', methods=['POST'])
 def predict_vcf_upload():
-    """
-    PRIMARY endpoint for VCF uploads.
-
-    Returns TWO results:
-      1. rule_dosage  — CPIC pharmacogenomic rule engine (always accurate, patient-specific)
-      2. ml_dosage    — Neural net trained on the federated model (for comparison)
-
-    The rule-based result is what gets prominently shown in the UI.
-    """
+    """PRIMARY endpoint for VCF uploads."""
     try:
         if 'file' not in request.files:
             return jsonify({"status": "error", "message": "No file uploaded!"}), 400
 
         file = request.files['file']
+        drug = request.form.get('drug', 'warfarin').lower()
+        
+        if not file.filename:
+            return jsonify({"status": "error", "message": "No file selected!"}), 400
+            
         os.makedirs(os.path.join(BASE_DIR, "temp_cache"), exist_ok=True)
         temp_path = os.path.join(BASE_DIR, "temp_cache", file.filename)
         file.save(temp_path)
 
         # ── Step 1: Parse everything from the VCF ─────────────────────
         from vcf_processing_engine import parse_vcf_and_predict
-        clinical_data, genomics, dosage_report = parse_vcf_and_predict(temp_path)
+        clinical_data, genomics, dosage_report = parse_vcf_and_predict(temp_path, drug=drug)
 
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        print(f"\n🧬 Auto-parsed from '{file.filename}':")
+        print(f"\n🧬 Auto-parsed from '{file.filename}' for {drug.upper()}:")
         print(f"   Age     : {clinical_data['age']} yrs")
         print(f"   Weight  : {clinical_data['weight']} kg")
         print(f"   Genomics: {genomics}")
@@ -263,7 +332,8 @@ def predict_vcf_upload():
                 float(clinical_data['weight']),
                 encode_gt(genomics["rs1799853_cyp2c9_2"]),
                 encode_gt(genomics["rs1057910_cyp2c9_3"]),
-                encode_gt(genomics["rs9923231_vkorc1"])
+                encode_gt(genomics["rs9923231_vkorc1"]),
+                encode_gt(genomics["rs3918290_dpyd"])
             ]], dtype=torch.float32)
             with torch.no_grad():
                 ml_val = max(0.5, round(m(feats).item(), 2))
@@ -275,21 +345,19 @@ def predict_vcf_upload():
 
         return jsonify({
             "status":             "success",
-            # Primary result — rule-based, always correct
             "rule_dosage":        dosage_report['recommended_dosage'],
             "dosage_value":       dosage_report['dosage_value'],
             "risk_level":         dosage_report['toxic_risk_profile'],
             "suitability":        dosage_report['suitability_status'],
             "clinical_notes":     dosage_report['clinical_notes'],
-            # Secondary — ML comparison
             "ml_dosage":          ml_dosage_str,
-            # Auto-parsed metadata
             "auto_parsed_age":    clinical_data['age'],
             "auto_parsed_weight": clinical_data['weight'],
             "detected_mutations": (
                 f"CYP2C9*2 (rs1799853): {genomics['rs1799853_cyp2c9_2']}  |  "
                 f"CYP2C9*3 (rs1057910): {genomics['rs1057910_cyp2c9_3']}  |  "
-                f"VKORC1 (rs9923231): {genomics['rs9923231_vkorc1']}"
+                f"VKORC1 (rs9923231): {genomics['rs9923231_vkorc1']}  |  "
+                f"DPYD (rs3918290): {genomics['rs3918290_dpyd']}"
             )
         })
     except Exception as e:
@@ -309,7 +377,8 @@ def predict_dosage_federated_vcf():
             float(data.get('weight', 70)),
             float(data.get('rs1799853', 0)),
             float(data.get('rs1057910', 0)),
-            float(data.get('rs9923231', 0))
+            float(data.get('rs9923231', 0)),
+            float(data.get('rs3918290', 0))
         ]], dtype=torch.float32)
         with torch.no_grad():
             val = m(feats).item()

@@ -3,7 +3,6 @@ import sys
 sys.modules['tensorflow'] = None
 sys.modules['tensorboard'] = None
 
-
 import os
 import flwr as fl
 import torch
@@ -85,6 +84,23 @@ def client_fn(cid: str) -> fl.client.Client:
 
 class LivePlottingStrategy(fl.server.strategy.FedProx):
     """Custom Flower Strategy wrapper to intercept aggregations and draw plots live."""
+    
+    # FIX: Overriding aggregate_fit to catch and save the aggregated global server weights
+    def aggregate_fit(self, server_round, results, failures):
+        aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, results, failures)
+        if aggregated_parameters is not None:
+            from flwr.common import parameters_to_ndarrays
+            ndarrays = parameters_to_ndarrays(aggregated_parameters)
+            backend_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Export server parameters to disk
+            global_model = DosagePredictionModel(input_dim=11)
+            set_model_parameters(global_model, ndarrays)
+            torch.save(global_model.state_dict(), os.path.join(backend_dir, "federated_geniedose_model.pt"))
+            print(f"💾 Saved updated global federated model state to backend/federated_geniedose_model.pt")
+            
+        return aggregated_parameters, aggregated_metrics
+
     def aggregate_evaluate(self, server_round, results, failures):
         # Call baseline FedProx aggregation logic
         loss_aggregated, metrics_aggregated = super().aggregate_evaluate(server_round, results, failures)

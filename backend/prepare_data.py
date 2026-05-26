@@ -27,7 +27,8 @@ def get_hospital_dataset(vcf_files, clinical_profiles):
             float(clinical['weight']),
             encode_genotype(genomics["rs1799853_cyp2c9_2"]),
             encode_genotype(genomics["rs1057910_cyp2c9_3"]),
-            encode_genotype(genomics["rs9923231_vkorc1"])
+            encode_genotype(genomics["rs9923231_vkorc1"]),
+            encode_genotype(genomics["rs3918290_dpyd"])
         ]
         
         X_list.append(feature_vector)

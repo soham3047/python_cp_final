@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DosagePredictionModel(nn.Module):
-    def __init__(self, input_dim=10):
+    def __init__(self, input_dim=11):
         super(DosagePredictionModel, self).__init__()
         # Input layer: map the 10 structural genetic variables to a dense space
         self.fc1 = nn.Linear(input_dim, 32)
