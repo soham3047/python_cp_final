@@ -1,8 +1,12 @@
 import os
 import sys
+import io
 import torch
 import torch.nn as nn
-from flask import Flask, jsonify, request, send_from_directory
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_cors import CORS
 
 # Maintain clean runtime execution paths
@@ -13,6 +17,30 @@ sys.modules['tensorboard'] = None
 frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 app = Flask(__name__, static_folder=frontend_dir, static_url_path='')
 CORS(app)
+
+
+def create_plot_for_drug(drug_key):
+    drug_key = (drug_key or 'warfarin').lower()
+    if drug_key == 'carbamazepine':
+        from backend import carbamazepine_visualisation as plotmod
+    elif drug_key == 'sertraline':
+        from backend import antidepresant as plotmod
+    elif drug_key in ('5-fu', 'fluorouracil'):
+        from backend import five_ht_visualization as plotmod
+    else:
+        from backend import warfarine_visualization as plotmod
+    return plotmod.create_plot()
+
+
+@app.route('/api/generate-plot')
+def generate_plot():
+    drug = request.args.get('drug', 'warfarin').lower()
+    fig = create_plot_for_drug(drug)
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=200, bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
+    return send_file(buf, mimetype='image/png')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GLOBAL_MODEL_PATH = os.path.join(BASE_DIR, "global_geniedose_model.pt")
