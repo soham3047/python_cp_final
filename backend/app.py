@@ -249,7 +249,7 @@ def predict_dosage_manual_legacy():
 def run_simulation_placeholder():
     return jsonify({
         "status": "success", 
-        "message": "Flower distributed system arrays checked and balanced cleanly."
+        "message": "Simulation endpoint active. Federated learning components have been removed from this build."
     })
 
 if __name__ == "__main__":
