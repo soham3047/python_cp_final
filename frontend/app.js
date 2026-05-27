@@ -42,7 +42,7 @@ document.getElementById('show-graph-btn').addEventListener('click', async () => 
     graphImg.style.display = "none";
 
     try {
-        const response = await fetch(`http://127.0.0.1:5000/api/generate-plot?drug=${targetDrug}`);
+        const response = await fetch(`/api/generate-plot?drug=${targetDrug}`);
         if (!response.ok) throw new Error("Failed to capture binary stream.");
         
         const imageBlob = await response.blob();
@@ -75,7 +75,7 @@ document.getElementById('predict-form').addEventListener('submit', async (e) => 
             formData.append('file', fileInput.files[0]);
             formData.append('drug', document.getElementById('drug-select').value);
 
-            const res  = await fetch('http://127.0.0.1:5000/api/predict-vcf-upload', { method: 'POST', body: formData });
+            const res  = await fetch('/api/predict-vcf-upload', { method: 'POST', body: formData });
             const data = await res.json();
 
             if (data.status === 'success') {
@@ -106,7 +106,7 @@ document.getElementById('predict-form').addEventListener('submit', async (e) => 
             const age      = document.getElementById('patient-age').value;
             const weight   = document.getElementById('patient-weight').value;
 
-            const res  = await fetch('http://127.0.0.1:5000/predict-dosage', {
+            const res  = await fetch('/predict-dosage', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ drug, mutation, age, weight })
